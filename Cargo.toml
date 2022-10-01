@@ -41,9 +41,9 @@ url = "2.1"
 # mio = { version = "0.8.0", features = ["os-poll", "net"] }
 
 [target.'cfg(target_os="wasi")'.dependencies]
-tokio = { git="https://github.com/WasmEdge/tokio.git", version = "1", features = [ "io-util", "fs", "net", "time", "rt", "macros"] }
-tokio-util = {  git="https://github.com/WasmEdge/tokio.git", version = "0.7.2", features = ["codec", "io"] }
-wasmedge_wasi_socket = {git="https://github.com/second-state/wasmedge_wasi_socket.git"}
+tokio_wasi = {version = "1", features = [ "io-util", "fs", "net", "time", "rt", "macros", "sync"] }
+tokio-util_wasi = { version = "0.7.2", features = ["codec", "io"] }
+wasmedge_wasi_socket = "0.4.2"
 
 # [target.'cfg(not(target_os="wasi"))'.dev-dependencies]
 # tempfile = "3.1.0"
@@ -53,7 +53,7 @@ wasmedge_wasi_socket = {git="https://github.com/second-state/wasmedge_wasi_socke
 
 [target.'cfg(target_os="wasi")'.dev-dependencies]
 tempfile = "3.1.0"
-tokio = { git="https://github.com/WasmEdge/tokio.git", version = "1", features = [ "io-util", "fs", "net", "time", "rt", "macros"] }
+tokio_wasi = { version = "1", features = [ "io-util", "fs", "net", "time", "rt", "macros"] }
 rand = "0.8.0"
 
 [features]
@@ -68,7 +68,7 @@ default = [
 nightly = []
 
 [lib]
-name = "mysql_async_wasi"
+name = "mysql_async"
 path = "src/lib.rs"
 
 [profile.bench]
