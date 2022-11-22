@@ -58,7 +58,6 @@ rand = "0.8.0"
 
 [features]
 default = [
-    "flate2/zlib",
     "mysql_common/bigdecimal03",
     "mysql_common/rust_decimal",
     "mysql_common/time03",
@@ -66,6 +65,8 @@ default = [
     "mysql_common/frunk",
 ]
 nightly = []
+zlib = ["flate2/zlib"]
+full = ["default", "zlib"]
 
 [lib]
 name = "mysql_async"
