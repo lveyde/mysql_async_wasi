@@ -11,8 +11,6 @@ pub use self::{read_packet::ReadPacket, write_packet::WritePacket};
 use bytes::BytesMut;
 use futures_core::{ready, stream};
 use mysql_common::proto::codec::PacketCodec as PacketCodecInner;
-#[cfg(not(target_os = "wasi"))]
-use native_tls::{Certificate, Identity, TlsConnector};
 use pin_project::pin_project;
 #[cfg(not(target_os = "wasi"))]
 use socket2::{Socket as Socket2Socket, TcpKeepalive};
@@ -22,18 +20,16 @@ use tokio::{
     io::{AsyncRead, AsyncWrite, ErrorKind::Interrupted, ReadBuf},
     net::TcpStream,
 };
-use tokio_util::codec::{Decoder, Encoder, Framed, FramedParts};
+use tokio_util::codec::{Decoder, Encoder, Framed};
 
 #[cfg(unix)]
 use std::path::Path;
 use std::{
     fmt,
-    fs::File,
     future::Future,
     io::{
         self,
         ErrorKind::{BrokenPipe, NotConnected, Other},
-        Read,
     },
     mem::replace,
     ops::{Deref, DerefMut},
@@ -42,14 +38,12 @@ use std::{
     time::Duration,
 };
 
-use crate::{
-    buffer_pool::PooledBuf,
-    error::IoError,
-    opts::{HostPortOrUrl, SslOpts, DEFAULT_PORT},
-};
+use crate::{buffer_pool::PooledBuf, error::IoError, opts::HostPortOrUrl};
 
 #[cfg(unix)]
 use crate::io::socket::Socket;
+
+mod tls;
 
 macro_rules! with_interrupted {
     ($e:expr) => {
@@ -121,8 +115,10 @@ impl Encoder<PooledBuf> for PacketCodec {
 #[derive(Debug)]
 pub(crate) enum Endpoint {
     Plain(Option<TcpStream>),
-    #[cfg(not(target_os = "wasi"))]
+    #[cfg(feature = "native-tls-tls")]
     Secure(#[pin] tokio_native_tls::TlsStream<TcpStream>),
+    #[cfg(feature = "rustls-tls")]
+    Secure(#[pin] tokio_rustls::client::TlsStream<tokio::net::TcpStream>),
     #[cfg(unix)]
     Socket(#[pin] Socket),
 }
@@ -154,6 +150,14 @@ impl Future for CheckTcpStream<'_> {
 }
 
 impl Endpoint {
+    #[cfg(all(any(feature = "native-tls-tls", feature = "rustls-tls"), unix))]
+    fn is_socket(&self) -> bool {
+        match self {
+            Self::Socket(_) => true,
+            _ => false,
+        }
+    }
+
     /// Checks, that connection is alive.
     async fn check(&mut self) -> std::result::Result<(), IoError> {
         //return Ok(());
@@ -162,9 +166,15 @@ impl Endpoint {
                 CheckTcpStream(stream).await?;
                 Ok(())
             }
-            #[cfg(not(target_os = "wasi"))]
+            #[cfg(feature = "native-tls-tls")]
             Endpoint::Secure(tls_stream) => {
                 CheckTcpStream(tls_stream.get_mut().get_mut().get_mut()).await?;
+                Ok(())
+            }
+            #[cfg(feature = "rustls-tls")]
+            Endpoint::Secure(tls_stream) => {
+                let stream = tls_stream.get_mut().0;
+                CheckTcpStream(stream).await?;
                 Ok(())
             }
             #[cfg(unix)]
@@ -175,77 +185,40 @@ impl Endpoint {
             Endpoint::Plain(None) => unreachable!(),
         }
     }
-    #[cfg(not(target_os = "wasi"))]
+
+    #[cfg(any(feature = "native-tls-tls", feature = "rustls-tls"))]
     pub fn is_secure(&self) -> bool {
         matches!(self, Endpoint::Secure(_))
+    }
+
+    #[cfg(all(not(feature = "native-tls"), not(feature = "rustls")))]
+    pub async fn _make_secure(
+        &mut self,
+        _domain: String,
+        _ssl_opts: crate::SslOpts,
+    ) -> crate::error::Result<()> {
+        panic!(
+            "Client had asked for TLS connection but TLS support is disabled. \
+            Please enable one of the following features: [\"native-tls-tls\", \"rustls-tls\"]"
+        )
     }
 
     pub fn set_tcp_nodelay(&self, val: bool) -> io::Result<()> {
         match *self {
             Endpoint::Plain(Some(ref stream)) => stream.set_nodelay(val)?,
             Endpoint::Plain(None) => unreachable!(),
-            #[cfg(not(target_os = "wasi"))]
+            #[cfg(feature = "native-tls-tls")]
             Endpoint::Secure(ref stream) => {
                 stream.get_ref().get_ref().get_ref().set_nodelay(val)?
+            }
+            #[cfg(feature = "rustls-tls")]
+            Endpoint::Secure(ref stream) => {
+                let stream = stream.get_ref().0;
+                stream.set_nodelay(val)?;
             }
             #[cfg(unix)]
             Endpoint::Socket(_) => (/* inapplicable */),
         }
-        Ok(())
-    }
-    #[cfg(not(target_os = "wasi"))]
-    pub async fn make_secure(
-        &mut self,
-        domain: String,
-        ssl_opts: SslOpts,
-    ) -> std::result::Result<(), IoError> {
-        #[cfg(unix)]
-        if let Endpoint::Socket(_) = self {
-            // inapplicable
-            return Ok(());
-        }
-
-        let mut builder = TlsConnector::builder();
-        if let Some(root_cert_path) = ssl_opts.root_cert_path() {
-            let mut root_cert_data = vec![];
-            let mut root_cert_file = File::open(root_cert_path)?;
-            root_cert_file.read_to_end(&mut root_cert_data)?;
-
-            let root_certs = Certificate::from_der(&*root_cert_data)
-                .map(|x| vec![x])
-                .or_else(|_| {
-                    pem::parse_many(&*root_cert_data)
-                        .unwrap_or_default()
-                        .iter()
-                        .map(pem::encode)
-                        .map(|s| Certificate::from_pem(s.as_bytes()))
-                        .collect()
-                })?;
-
-            for root_cert in root_certs {
-                builder.add_root_certificate(root_cert);
-            }
-        }
-        if let Some(pkcs12_path) = ssl_opts.pkcs12_path() {
-            let der = std::fs::read(pkcs12_path)?;
-            let identity = Identity::from_pkcs12(&*der, ssl_opts.password().unwrap_or(""))?;
-            builder.identity(identity);
-        }
-        builder.danger_accept_invalid_hostnames(ssl_opts.skip_domain_validation());
-        builder.danger_accept_invalid_certs(ssl_opts.accept_invalid_certs());
-        let tls_connector: tokio_native_tls::TlsConnector = builder.build()?.into();
-
-        *self = match self {
-            Endpoint::Plain(stream) => {
-                let stream = stream.take().unwrap();
-                let tls_stream = tls_connector.connect(&*domain, stream).await?;
-                Endpoint::Secure(tls_stream)
-            }
-            Endpoint::Secure(_) => unreachable!(),
-            #[cfg(unix)]
-            Endpoint::Socket(_) => unreachable!(),
-        };
-
         Ok(())
     }
 }
@@ -262,12 +235,17 @@ impl From<Socket> for Endpoint {
         Endpoint::Socket(socket)
     }
 }
-#[cfg(not(target_os = "wasi"))]
+
+#[cfg(feature = "native-tls-tls")]
 impl From<tokio_native_tls::TlsStream<TcpStream>> for Endpoint {
     fn from(stream: tokio_native_tls::TlsStream<TcpStream>) -> Self {
         Endpoint::Secure(stream)
     }
 }
+
+/* TODO
+#[cfg(feature = "rustls-tls")]
+*/
 
 impl AsyncRead for Endpoint {
     fn poll_read(
@@ -280,7 +258,9 @@ impl AsyncRead for Endpoint {
             EndpointProj::Plain(ref mut stream) => {
                 Pin::new(stream.as_mut().unwrap()).poll_read(cx, buf)
             }
-            #[cfg(not(target_os = "wasi"))]
+            #[cfg(feature = "native-tls-tls")]
+            EndpointProj::Secure(ref mut stream) => stream.as_mut().poll_read(cx, buf),
+            #[cfg(feature = "rustls-tls")]
             EndpointProj::Secure(ref mut stream) => stream.as_mut().poll_read(cx, buf),
             #[cfg(unix)]
             EndpointProj::Socket(ref mut stream) => stream.as_mut().poll_read(cx, buf),
@@ -299,7 +279,9 @@ impl AsyncWrite for Endpoint {
             EndpointProj::Plain(ref mut stream) => {
                 Pin::new(stream.as_mut().unwrap()).poll_write(cx, buf)
             }
-            #[cfg(not(target_os = "wasi"))]
+            #[cfg(feature = "native-tls-tls")]
+            EndpointProj::Secure(ref mut stream) => stream.as_mut().poll_write(cx, buf),
+            #[cfg(feature = "rustls-tls")]
             EndpointProj::Secure(ref mut stream) => stream.as_mut().poll_write(cx, buf),
             #[cfg(unix)]
             EndpointProj::Socket(ref mut stream) => stream.as_mut().poll_write(cx, buf),
@@ -315,7 +297,9 @@ impl AsyncWrite for Endpoint {
             EndpointProj::Plain(ref mut stream) => {
                 Pin::new(stream.as_mut().unwrap()).poll_flush(cx)
             }
-            #[cfg(not(target_os = "wasi"))]
+            #[cfg(feature = "native-tls-tls")]
+            EndpointProj::Secure(ref mut stream) => stream.as_mut().poll_flush(cx),
+            #[cfg(feature = "rustls-tls")]
             EndpointProj::Secure(ref mut stream) => stream.as_mut().poll_flush(cx),
             #[cfg(unix)]
             EndpointProj::Socket(ref mut stream) => stream.as_mut().poll_flush(cx),
@@ -331,7 +315,9 @@ impl AsyncWrite for Endpoint {
             EndpointProj::Plain(ref mut stream) => {
                 Pin::new(stream.as_mut().unwrap()).poll_shutdown(cx)
             }
-            #[cfg(not(target_os = "wasi"))]
+            #[cfg(feature = "native-tls-tls")]
+            EndpointProj::Secure(ref mut stream) => stream.as_mut().poll_shutdown(cx),
+            #[cfg(feature = "rustls-tls")]
             EndpointProj::Secure(ref mut stream) => stream.as_mut().poll_shutdown(cx),
             #[cfg(unix)]
             EndpointProj::Socket(ref mut stream) => stream.as_mut().poll_shutdown(cx),
@@ -368,7 +354,7 @@ impl Stream {
 
     pub(crate) async fn connect_tcp(
         addr: &HostPortOrUrl,
-        keepalive: Option<Duration>,
+        _keepalive: Option<Duration>,
     ) -> io::Result<Stream> {
         let tcp_stream = match addr {
             HostPortOrUrl::HostPort(host, port) => {
@@ -445,7 +431,8 @@ impl Stream {
         self.codec = Some(Box::new(codec));
         Ok(())
     }
-    #[cfg(not(target_os = "wasi"))]
+
+    #[cfg(any(feature = "native-tls-tls", feature = "rustls-tls"))]
     pub(crate) fn is_secure(&self) -> bool {
         self.codec.as_ref().unwrap().get_ref().is_secure()
     }
@@ -526,6 +513,9 @@ mod test {
         let endpoint = stream.codec.as_mut().unwrap().get_ref();
         let stream = match endpoint {
             super::Endpoint::Plain(Some(stream)) => stream,
+            #[cfg(feature = "rustls-tls")]
+            super::Endpoint::Secure(tls_stream) => tls_stream.get_ref().0,
+            #[cfg(feature = "native-tls")]
             super::Endpoint::Secure(tls_stream) => tls_stream.get_ref().get_ref().get_ref(),
             _ => unreachable!(),
         };
