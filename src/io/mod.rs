@@ -358,32 +358,23 @@ impl Stream {
     ) -> io::Result<Stream> {
         let tcp_stream = match addr {
             HostPortOrUrl::HostPort(host, port) => {
-                #[cfg(target_os = "wasi")]
-                {
-                    let mut addrs = wasmedge_wasi_socket::nslookup(host, "http").unwrap();
-                    for addr in addrs.iter_mut() {
-                        addr.set_port(*port);
-                    }
-                    TcpStream::connect(&*addrs).await?
-                }
-                #[cfg(not(target_os = "wasi"))]
                 TcpStream::connect((host.as_str(), *port)).await?
             }
             HostPortOrUrl::Url(url) => {
                 #[cfg(not(target_os = "wasi"))]
-                let addrs = url.socket_addrs(|| Some(DEFAULT_PORT))?;
-                #[cfg(target_os = "wasi")]
-                let mut addrs = wasmedge_wasi_socket::nslookup(
-                    url.host_str().expect("Unable to get host"),
-                    "http",
-                )
-                .unwrap();
-                #[cfg(target_os = "wasi")]
-                for addr in addrs.iter_mut() {
-                    addr.set_port(url.port_or_known_default().expect("No port found in url"));
+                {
+                    let addrs = url.socket_addrs(|| Some(DEFAULT_PORT))?;
+                    TcpStream::connect(addrs).await?
                 }
 
-                TcpStream::connect(&*addrs).await?
+                #[cfg(target_os = "wasi")]
+                {
+                    let addrs = (
+                        url.host_str().expect("Unable to get host"),
+                        url.port_or_known_default().expect("No port found in url"),
+                    );
+                    TcpStream::connect(addrs).await?
+                }
             }
         };
         #[cfg(not(target_os = "wasi"))]
