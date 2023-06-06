@@ -7,7 +7,7 @@ license = "MIT/Apache-2.0"
 name = "mysql_async_wasi"
 readme = "README.md"
 repository = "https://github.com/WasmEdge/mysql_async_wasi"
-version = "0.31.2"
+version = "0.31.3"
 exclude = ["test/*"]
 edition = "2018"
 categories = ["asynchronous", "database"]
@@ -42,9 +42,17 @@ url = "2.1"
 # mio = { version = "0.8.0", features = ["os-poll", "net"] }
 
 [target.'cfg(target_os="wasi")'.dependencies]
-tokio_wasi = {version = "1", features = [ "io-util", "fs", "net", "time", "rt", "macros", "sync"] }
+tokio_wasi = { version = "1", features = [
+    "io-util",
+    "fs",
+    "net",
+    "time",
+    "rt",
+    "macros",
+    "sync",
+] }
 tokio-util_wasi = { version = "0.7.2", features = ["codec", "io"] }
-wasmedge_wasi_socket = "0.4.3"
+wasmedge_wasi_socket = "0.5"
 
 # [target.'cfg(not(target_os="wasi"))'.dev-dependencies]
 # tempfile = "3.1.0"
@@ -88,7 +96,14 @@ optional = true
 
 [dev-dependencies]
 tempfile = "3.1.0"
-tokio_wasi = { version = "1", features = [ "io-util", "fs", "net", "time", "rt", "macros"] }
+tokio_wasi = { version = "1", features = [
+    "io-util",
+    "fs",
+    "net",
+    "time",
+    "rt",
+    "macros",
+] }
 rand = "0.8.0"
 
 [features]
