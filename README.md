@@ -4,7 +4,7 @@ Tokio based asynchronous MySql client library for The Rust Programming Language.
 This is a fork from the original [mysql_async](https://github.com/blackbeam/mysql_async) with support for WebAssembly compilation target.
 That allows async MySql apps to run inside the [WasmEdge Runtime](https://github.com/WasmEdge/WasmEdge#readme) as a lightweight and secure alternative to natively compiled apps in Linux container.
 
-For more details and usage examples, please see the upstream [mysql_async](https://github.com/blackbeam/mysql-async) source and [this example](https://github.com/WasmEdge/wasmedge-db-examples/tree/main/mysql_async).
+For more details and usage examples, please see the upstream [mysql_async](https://github.com/blackbeam/mysql_async) source and [this example](https://github.com/WasmEdge/wasmedge-db-examples/tree/main/mysql_async).
 
 Note: We do not yet support SSL / TLS connections to databases in this WebAssembly client.
 
