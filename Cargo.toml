@@ -7,7 +7,7 @@ license = "MIT/Apache-2.0"
 name = "mysql_async_wasi"
 readme = "README.md"
 repository = "https://github.com/WasmEdge/mysql_async_wasi"
-version = "0.31.4"
+version = "0.31.5"
 exclude = ["test/*"]
 edition = "2018"
 categories = ["asynchronous", "database"]
@@ -15,7 +15,7 @@ categories = ["asynchronous", "database"]
 [dependencies]
 bytes = "1.0"
 crossbeam = "0.8.1"
-flate2 = { version = "1.0", features = ["zlib"], default-features = false }
+flate2 = { version = "1.0", default-features = false }
 futures-core = "0.3"
 futures-util = "0.3"
 futures-sink = "0.3"
@@ -107,25 +107,21 @@ tokio_wasi = { version = "1", features = [
 rand = "0.8.0"
 
 [features]
-default = [
-    "mysql_common/bigdecimal03",
-    "mysql_common/rust_decimal",
-    "mysql_common/time03",
-    "mysql_common/uuid",
-    "mysql_common/frunk",
-    # "native-tls-tls",
-]
+default = ["common", "rust_backend"]
 default-rustls = [
-    "flate2/zlib",
-    "mysql_common/bigdecimal03",
-    "mysql_common/rust_decimal",
-    "mysql_common/time03",
-    "mysql_common/uuid",
-    "mysql_common/frunk",
+    "common",
+    "rust_backend",
     "rustls-tls",
 ]
-minimal = ["flate2/zlib"]
+common = [
+    "mysql_common/bigdecimal03",
+    "mysql_common/rust_decimal",
+    "mysql_common/time03",
+    "mysql_common/uuid",
+    "mysql_common/frunk",
+]
 native-tls-tls = ["native-tls", "tokio-native-tls"]
+rust_backend = ["flate2/rust_backend"]
 rustls-tls = [
     "rustls",
     "tokio-rustls",
@@ -133,9 +129,10 @@ rustls-tls = [
     "webpki-roots",
     "rustls-pemfile",
 ]
-nightly = []
+minimal = ["flate2/zlib"]
 zlib = ["flate2/zlib"]
 full = ["default", "zlib"]
+nightly = []
 
 [lib]
 name = "mysql_async"
